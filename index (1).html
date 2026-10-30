@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calcolo diametro tubo – piscine</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --ink:#1c2430; --muted:#6b7686; --line:#dde2ea; --acc:#0b6fa4; --ok:#e3f3ea; --okline:#2e8b57; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:760px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:1.35rem; margin:0 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:16px; }
+  label.t { display:block; font-weight:600; margin-bottom:6px; }
+  .row { display:flex; gap:8px; }
+  input[type=text], select { font:inherit; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; color:inherit; }
+  input[type=text] { flex:1; min-width:0; font-size:1.15rem; }
+  .opts { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }
+  .opt { display:flex; align-items:flex-start; gap:8px; border:1px solid var(--line); border-radius:8px; padding:10px; cursor:pointer; }
+  .opt:has(input:checked) { border-color:var(--acc); background:#eef6fb; }
+  .opt small { display:block; color:var(--muted); }
+  #res { background:var(--ok); border-color:var(--okline); }
+  #res.warn { background:#fff4e0; border-color:#c98a1b; }
+  .big { font-size:1.6rem; font-weight:700; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:10px; }
+  .grid div span { display:block; color:var(--muted); font-size:.85rem; }
+  table { width:100%; border-collapse:collapse; font-size:.92rem; }
+  th, td { padding:6px 8px; text-align:right; border-bottom:1px solid var(--line); }
+  th:first-child, td:first-child { text-align:left; }
+  tr.sel td { background:var(--ok); font-weight:700; }
+  tr.over td { color:#a33; }
+  details summary { cursor:pointer; font-weight:600; }
+  .note { color:var(--muted); font-size:.85rem; margin-top:8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Calcolo diametro tubo</h1>
+
+  <div class="card">
+    <label class="t" for="q">Portata</label>
+    <div class="row">
+      <input id="q" type="text" inputmode="decimal" placeholder="es. 100" autofocus>
+      <select id="u" aria-label="Unità">
+        <option value="m3h">m³/h</option>
+        <option value="ls">l/s</option>
+        <option value="lmin">l/min</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="t" style="display:block;margin-bottom:6px;font-weight:600">Circuito</span>
+    <div class="opts" id="opts"></div>
+  </div>
+
+  <div class="card" id="res" hidden></div>
+
+  <div class="card">
+    <details>
+      <summary>Tabella diametri</summary>
+      <table id="tab" style="margin-top:10px"></table>
+      <p class="note">Q [m³/h] = (π · (DN/2)² / 1000) · v · 3,6 &nbsp;|&nbsp; DN = diametro interno [mm]. Dati da Tabella velocità/portata (UNI 10637).</p>
+    </details>
+  </div>
+</main>
+
+<script>
+// De = diametro esterno [mm], DN = diametro interno [mm] (dalla tabella)
+const TUBI = [
+  [20,16],[25,20],[32,25],[40,32],[50,40],[63,50],[75,65],[90,80],[110,100],[125,110],
+  [140,125],[160,150],[200,180],[225,200],[250,225],[315,300],[355,334],[400,377],[450,369],[500,409]
+].map(([de, dn]) => ({ de, dn, area: Math.PI * Math.pow(dn / 2000, 2) })); // area in m²
+
+// mode "closest" -> DN con velocità più vicina al valore indicato
+// mode "max"     -> DN più piccolo la cui portata massima in tabella (colonna della velocità del circuito) >= portata richiesta
+const CIRCUITI = {
+  aspirazione: { label: "Aspirazione", v: 1.7, mode: "max",     hint: "v ≤ 1,7 m/s" },
+  mandata:     { label: "Mandata",     v: 2.5, mode: "max",     hint: "v ≤ 2,5 m/s" },
+  sfioro:      { label: "Sfioro",      v: 0.8, mode: "max",     hint: "v ≤ 0,8 m/s" },
+  scarico:     { label: "Scarico",     v: 0.6, mode: "max",     hint: "v ≤ 0,6 m/s" },
+  aria:        { label: "Aria",        v: 14,  mode: "closest", hint: "v ≈ 14 m/s" }
+};
+
+const velocita = (qm3h, t) => qm3h / 3600 / t.area;        // m/s
+const portataA = (t, v) => t.area * v * 3600;               // m³/h
+
+function scegli(qm3h, c) {
+  const vs = TUBI.map(t => velocita(qm3h, t));
+  let i;
+  if (c.mode === "max") {
+    i = vs.findIndex(v => v <= c.v + 1e-9);
+    if (i === -1) i = TUBI.length - 1;                       // portata oltre il tubo più grande
+  } else {
+    i = 0;
+    vs.forEach((v, k) => { if (Math.abs(v - c.v) < Math.abs(vs[i] - c.v)) i = k; });
+  }
+  return { i, v: vs[i], fuori: c.mode === "max" && vs[i] > c.v + 1e-9 };
+}
+
+const fmt = (n, d = 2) => n.toLocaleString("it-IT", { minimumFractionDigits: d, maximumFractionDigits: d });
+
+function leggiPortata() {
+  const raw = document.getElementById("q").value.trim().replace(",", ".");
+  const q = parseFloat(raw);
+  if (!isFinite(q) || q <= 0) return null;
+  const u = document.getElementById("u").value;
+  return u === "ls" ? q * 3.6 : u === "lmin" ? q * 0.06 : q;   // -> m³/h
+}
+
+function aggiorna() {
+  const q = leggiPortata();
+  const key = document.querySelector("input[name=c]:checked").value;
+  const c = CIRCUITI[key];
+  const res = document.getElementById("res");
+  const tab = document.getElementById("tab");
+  let sel = -1;
+
+  if (q === null) {
+    res.hidden = true;
+  } else {
+    const r = scegli(q, c);
+    sel = r.i;
+    const t = TUBI[r.i];
+    res.hidden = false;
+    res.className = "card" + (r.fuori ? " warn" : "");
+    res.id = "res";
+    res.innerHTML =
+      `<div class="big">DN ${t.dn} mm &nbsp;(tubo Ø ${t.de})</div>` +
+      `<div class="grid">
+        <div><span>Circuito</span>${c.label} (${c.hint})</div>
+        <div><span>Portata</span>${fmt(q)} m³/h</div>
+        <div><span>Velocità effettiva</span>${fmt(r.v)} m/s</div>
+        <div><span>Portata max a ${fmt(c.v, 1)} m/s</span>${fmt(portataA(t, c.v))} m³/h</div>
+      </div>` +
+      (r.fuori ? `<p class="note">⚠ Portata superiore al tubo più grande in tabella: velocità oltre il limite.</p>` : "");
+  }
+
+  tab.innerHTML =
+    `<tr><th>De [mm]</th><th>DN [mm]</th><th>Q a ${fmt(c.v, 1)} m/s [m³/h]</th>${q !== null ? "<th>v effettiva [m/s]</th>" : ""}</tr>` +
+    TUBI.map((t, k) =>
+      `<tr class="${k === sel ? "sel" : ""}"><td>${t.de}</td><td>${t.dn}</td><td>${fmt(portataA(t, c.v))}</td>` +
+      (q !== null ? `<td>${fmt(velocita(q, t))}</td>` : "") + `</tr>`).join("");
+}
+
+document.getElementById("opts").innerHTML = Object.entries(CIRCUITI).map(([k, c], n) =>
+  `<label class="opt"><input type="radio" name="c" value="${k}" ${n === 0 ? "checked" : ""}>
+   <span>${c.label}<small>${c.hint}</small></span></label>`).join("");
+
+document.getElementById("q").addEventListener("input", aggiorna);
+document.getElementById("u").addEventListener("change", aggiorna);
+document.querySelectorAll("input[name=c]").forEach(r => r.addEventListener("change", aggiorna));
+aggiorna();
+</script>
+</body>
+</html>
